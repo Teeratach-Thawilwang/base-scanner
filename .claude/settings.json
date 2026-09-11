@@ -1,0 +1,140 @@
+{
+  "cleanupPeriodDays": 7,
+  "subagentPromptCacheTtl": "5m",
+  "env": {
+    "BASH_MAX_OUTPUT_LENGTH": "150000",
+    "CLAUDE_CODE_DISABLE_CRON": "1",
+    "BASH_ENV": "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/no-core-dump.sh"
+  },
+  "permissions": {
+    "allow": [
+      "Read(~/.claude/**)",
+      "Read(~/Work/**)",
+      "Edit(~/Work/**)",
+      "Write(~/Work/**)",
+      "Bash(git:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(bash *scripts/commit-survey.sh*)",
+      "Bash(bash *scripts/commit-apply.sh*)",
+      "Bash(ALLOW_SENSITIVE=1 bash *scripts/commit-apply.sh*)",
+      "PowerShell(*scripts/commit-survey.sh*)",
+      "PowerShell(*scripts/commit-apply.sh*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "mcp__context7__query-docs",
+      "mcp__context7__resolve-library-id",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_fill_form",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_evaluate",
+      "mcp__playwright__browser_wait_for"
+    ],
+    "deny": [
+      "mcp__comfyui",
+      "ScheduleWakeup",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "RemoteTrigger",
+      "PushNotification",
+      "DesignSync",
+      "NotebookEdit"
+    ],
+    "defaultMode": "bypassPermissions"
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/notify-context-size-over.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/notify-done.sh\"",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/ai-usage.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/ai-usage.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/ai-usage.py\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/notify-question.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/prettier-format.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "typescript-lsp@claude-plugins-official": true,
+    "hookify@claude-plugins-official": false,
+    "stripe@claude-plugins-official": false,
+    "vercel@claude-plugins-official": false
+  },
+  "autoMemoryEnabled": false,
+  "disableClaudeAiConnectors": true,
+  "disableBundledSkills": true,
+  "disableRemoteControl": true,
+  "disableWorkflows": true,
+  "disableArtifact": true,
+  "alwaysThinkingEnabled": true,
+  "showThinkingSummaries": false,
+  "skipDangerousModePermissionPrompt": true,
+  "switchModelsOnFlag": false,
+  "plansDirectory": "./.plans",
+  "outputStyle": "./.claude/output-styles/human-styles.md"
+}
