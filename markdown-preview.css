@@ -1,0 +1,282 @@
+/* markdown-preview.css — reading style for this repo's .md files in the VS Code preview.
+ *
+ * Wired from .vscode/settings.json via "markdown.styles", kept at the repo root
+ * because .gitignore drops .vscode/. Sizes and spacing only — no colours, so it
+ * follows the reader's theme.
+ */
+
+/* one family drawing both Thai and Latin. The editor font was used here before,
+ * but JetBrains Mono has no Thai glyphs, so every mixed line fell back to a second
+ * face mid-sentence and the two never matched in x-height or stroke weight, which
+ * is what made a page tiring to read. Sarabun covers both scripts and ships nine
+ * weights, so 600 below is a real cut rather than a synthesised one. The faces
+ * after it are what to try if Sarabun is missing.
+ *
+ * no word-spacing rule: that one existed to widen the mono space back down to a
+ * proportional one, and there is no mono space left to correct. Thai marks the end
+ * of a phrase with a space and nothing else, so it has to keep its full width. */
+/* the preview's own stylesheet sets `padding: 0 26px` on `html, body`; clearing
+   html makes the rule below the whole side inset */
+html {
+  padding: 0;
+}
+
+body {
+  padding: 0 3em;
+  line-height: 1.8;
+  font-family:
+    "Sarabun",
+    "IBM Plex Sans Thai Looped",
+    "Sukhumvit Set",
+    -apple-system,
+    system-ui,
+    sans-serif;
+  /* Sarabun draws smaller than a system UI face at the same px */
+  font-size: calc(var(--markdown-font-size, 14px) * 1.1);
+}
+
+/* ---- headings: gentle steps, weight and rules carry the hierarchy ---- */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  line-height: 1.5;
+  font-weight: 700;
+}
+
+/* every section here opens with `#`, so h1 repeats down the page rather than
+   opening it once */
+h1 {
+  font-size: 1.75em;
+  margin: 1.6em 0 0.4em;
+  padding-bottom: 0.4em;
+  border-bottom: 2px solid;
+  border-color: color-mix(in srgb, currentColor 30%, transparent);
+}
+
+/* the file's own title has nothing above it to separate from */
+h1:first-child {
+  margin-top: 0;
+}
+
+h2 {
+  font-size: 1.38em;
+  margin: 1.5em 0 0.5em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid;
+  border-color: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+h3 {
+  font-size: 1.15em;
+  margin: 1.2em 0 0.4em;
+}
+
+h4,
+h5,
+h6 {
+  font-size: 1.02em;
+  margin: 1em 0 0.4em;
+  opacity: 0.85;
+}
+
+/* ---- body ---- */
+
+/* the preview's own stylesheet uses 16px; this goes a little past it because
+   most .md here is ordinary markdown where a blank source line is the only thing
+   separating two paragraphs, and at 16px they still read as one block.
+
+   .plans/ files separate blocks with a `&nbsp;` line instead, which renders as a
+   paragraph of its own. Those gaps come out at 22 + one line box + 22, so they
+   read wider than the rest. Dropping the `&nbsp;` lines is the fix, not a
+   smaller margin here.
+
+   line-height stays 1.8. That one sets the rhythm inside a paragraph, which is
+   the part that reads well, so the gap is tuned with margin instead. */
+p {
+  line-height: 1.8;
+  margin: 0 0 22px;
+}
+
+/* a bullet is one item, and the eye has to see where that item ends. At 1.8 a
+   wrapped line sat as far from its own first line as the next bullet did, so a
+   list read as one block of prose. The tighter line-height ties a bullet's own
+   lines together, and the margin is what separates one bullet from the next:
+   the gap between two bullets now runs about 1.5x the gap inside one. */
+li {
+  line-height: 1.55;
+  margin: 0.8em 0;
+}
+
+ul,
+ol {
+  margin: 0 0 22px;
+  padding-left: 1.5em;
+}
+
+/* a sub-list belongs to the bullet above it, so it stays closer than a sibling */
+li > ul,
+li > ol {
+  margin: 0.3em 0;
+}
+
+/* ---- requirement lines ----
+   a requirement is either a plain bullet or a <details> whose <summary> is the
+   line itself; both sit on the same left edge and read the same when closed. */
+
+details {
+  margin: 0.8em 0 0.8em 0.6em;
+}
+
+summary {
+  cursor: pointer;
+  line-height: 1.55;
+  padding-left: 0.15em;
+}
+
+summary:hover {
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  border-radius: 3px;
+}
+
+summary::marker {
+  color: color-mix(in srgb, currentColor 45%, transparent);
+}
+
+details[open] > summary {
+  margin-bottom: 0.3em;
+}
+
+/* the body of an open requirement lines up under the summary text */
+details > ul,
+details > ol {
+  margin: 0.3em 0 0.9em;
+  padding-left: 2.6em;
+}
+
+details > p {
+  margin: 0.3em 0 0.9em 1.2em;
+}
+
+/* the ID tag — an empty anchor plus a code span, so any line can be linked to.
+   The one colour in this file, taken from the theme so it works light and dark. */
+a[id] + code {
+  font-size: 0.78em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.15em 0.5em;
+  border-radius: 4px;
+  color: var(--vscode-textLink-foreground, #0366d6);
+  background: color-mix(
+    in srgb,
+    var(--vscode-textLink-foreground, #0366d6) 14%,
+    transparent
+  );
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--vscode-textLink-foreground, #0366d6) 32%,
+      transparent
+    );
+}
+
+/* a requirement cited from elsewhere keeps the same tag look */
+a[href^="#"] > code,
+a[href*=".md#"] > code {
+  font-weight: 700;
+  color: var(--vscode-textLink-foreground, #0366d6);
+}
+
+/* bold is everywhere in these specs; softening it keeps a page from reading flat */
+strong {
+  font-weight: 600;
+}
+
+blockquote {
+  margin: 0.7em 0;
+  padding: 0.2em 1.2em;
+  border-left: 3px solid;
+  border-color: color-mix(in srgb, currentColor 25%, transparent);
+  opacity: 0.92;
+}
+
+blockquote li {
+  margin: 0.55em 0;
+}
+
+/* ---- tables: many are wider than the measure, so shrink and let them scroll ---- */
+
+table {
+  display: block;
+  overflow-x: auto;
+  font-size: 0.9em;
+  line-height: 1.6;
+  border-collapse: collapse;
+  margin: 0.8em 0;
+}
+
+th,
+td {
+  padding: 0.5em 0.8em;
+  vertical-align: top;
+}
+
+/* the editor's mono face, so a code span is something the eye can catch rather
+   than one more stretch of the same prose texture */
+pre,
+code {
+  font-family: var(--vscode-editor-font-family), ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+pre {
+  line-height: 1.6;
+  padding: 1em;
+  overflow-x: auto;
+}
+
+/* pre already stepped down, so a second 0.9em here would compound */
+pre code {
+  font-size: 1em;
+  white-space: pre;
+}
+
+code {
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+/* ---- mermaid: rendered natively by the preview since VS Code 1.121 ----
+   a top-down flow gets tall and narrow, so give it the full panel, centred */
+
+pre:has(> code.language-mermaid),
+.mermaid {
+  max-width: none;
+  width: 100%;
+  background: none;
+  padding: 0;
+  text-align: center;
+  overflow-x: auto;
+}
+
+pre > code.language-mermaid svg,
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ---- the "^ back to contents" markers that sit under every heading ---- */
+
+sup {
+  opacity: 0.6;
+}
+
+hr {
+  margin: 0.9em 0;
+  border: 0;
+  border-top: 1px solid;
+  border-color: color-mix(in srgb, currentColor 18%, transparent);
+}
