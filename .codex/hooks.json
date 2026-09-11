@@ -1,0 +1,77 @@
+{
+  "description": "The Codex half of .claude/settings.json's hooks, calling the same scripts in .claude/hooks/. codex-usage.py logs to .codex/logs/ai-requests.log and caps the session from PreToolUse; CODEX_RATE_LIMIT_OFF=1 silences it, and RATE_LIMIT_OFF=1 silences Claude's accountant with it. Codex rewrites this file on load, so the reasoning behind it lives in AGENTS.md, not in here. Run /hooks to trust.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/notify-context-size-over.sh\"",
+            "commandWindows": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/notify-context-size-over.sh\"",
+            "statusMessage": "Checking context size",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NOTIFY_MAC_SOUND=Funk NOTIFY_WINDOWS_SOUND=ms-winsoundevent:Notification.IM bash \"$(git rev-parse --show-toplevel)/.claude/hooks/notify-done.sh\" Codex",
+            "commandWindows": "NOTIFY_MAC_SOUND=Funk NOTIFY_WINDOWS_SOUND=ms-winsoundevent:Notification.IM bash \"$(git rev-parse --show-toplevel)/.claude/hooks/notify-done.sh\" Codex",
+            "statusMessage": "Notifying",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.claude/hooks/codex-usage.py\"",
+            "commandWindows": "python \"$(git rev-parse --show-toplevel)/.claude/hooks/codex-usage.py\"",
+            "statusMessage": "Logging usage",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.claude/hooks/codex-usage.py\"",
+            "commandWindows": "python \"$(git rev-parse --show-toplevel)/.claude/hooks/codex-usage.py\"",
+            "statusMessage": "Logging usage",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "request_user_input|AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/notify-question.sh\" Codex",
+            "commandWindows": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/notify-question.sh\" Codex",
+            "statusMessage": "Notifying",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/prettier-format.sh\"",
+            "commandWindows": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/prettier-format.sh\"",
+            "statusMessage": "Running Prettier",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
