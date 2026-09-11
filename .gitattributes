@@ -1,2 +1,40 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Every text file is stored LF in the repo and checked out LF everywhere.
+# Without eol=lf, Windows follows core.autocrlf and writes CRLF working copies.
+* text=auto eol=lf
+
+# Must stay LF on Windows too: a CR in a shebang or a heredoc breaks the script.
+*.sh       text eol=lf
+*.bash     text eol=lf
+*.py       text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+Dockerfile text eol=lf
+Makefile   text eol=lf
+
+# Windows-only scripts: cmd.exe and PowerShell want CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary: never normalized, never diffed as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.mp4 binary
+*.mp3 binary
+*.wav binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.safetensors binary
+
+# Lockfiles: generated, so collapse them in diffs and reviews.
+package-lock.json -diff linguist-generated
+pnpm-lock.yaml    -diff linguist-generated
+yarn.lock         -diff linguist-generated
+bun.lockb         binary

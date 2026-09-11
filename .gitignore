@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+
+# Build outputs
+dist/
+dist-server/
+
+# Environment variables
+.env
+.env.local
+.env.test
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.eslintcache
+
+# OS generated files
+.DS_Store
+._*
+
+# Logs
+*.log
+logs/
+
+# Coverage output
+coverage/
+
+# Temporary folders
+.tmp/
+
+# AI specific
+.claude/logs
+.claude/account/*
+.claude/*.lock
+.claude/**/*.lock
+# Codex local state. .codex/skills is a link into .claude/skills, made per machine by
+# .codex/link-skills.sh, because git carrying a symlink breaks on Windows.
+.codex/skills
+.codex/logs/*
+.cursor/
+.roo/
+.taskmaster/
+.cline/
+.windsurf/
+.serena/
+.mcp.json
+.gemini/
+.playwright-mcp/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Task files
+tasks.json
+tasks/
+!src/i18n/locales/en/tasks.json
+
+# Git worktrees
+.worktrees/
