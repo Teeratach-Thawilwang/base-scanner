@@ -67,3 +67,7 @@ tasks/
 
 # Git worktrees
 .worktrees/
+
+# Survey data stays out of this public repo, the coordinates are a home address
+*.csv
+data/

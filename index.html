@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0d10" />
+    <title>Base Scanner</title>
+    <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+    <style>
+      :root {
+        --bg: #0b0d10;
+        --panel: #14181d;
+        --line: #262c33;
+        --text: #e7ecf2;
+        --muted: #8c97a3;
+        --accent: #5ac8fa;
+        --good: #30d158;
+        --warn: #ffd60a;
+        --bad: #ff453a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, 'Noto Sans Thai', 'Segoe UI', sans-serif;
+        overscroll-behavior: none;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      main {
+        flex: 1;
+        overflow: hidden;
+        position: relative;
+      }
+      .screen {
+        display: none;
+        height: 100%;
+        overflow-y: auto;
+        padding: 12px 12px 16px;
+      }
+      .screen.active {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .chips {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .chip {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 6px 12px;
+      }
+      .chip.bad {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+      .chip.good {
+        border-color: var(--good);
+        color: var(--good);
+      }
+      .banner {
+        display: none;
+        border-radius: 12px;
+        padding: 12px 14px;
+        font-size: 15px;
+        line-height: 1.5;
+      }
+      .banner.show {
+        display: block;
+      }
+      .banner.bad {
+        background: #3a1210;
+        border: 1px solid var(--bad);
+        color: #ffb4ae;
+      }
+      .banner.warn {
+        background: #2f2708;
+        border: 1px solid var(--warn);
+        color: #ffe89a;
+      }
+      .readout {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 18px 16px;
+        text-align: center;
+      }
+      .readout .label {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .delta {
+        font-size: 68px;
+        font-weight: 700;
+        line-height: 1.1;
+        font-variant-numeric: tabular-nums;
+      }
+      .delta .unit {
+        font-size: 22px;
+        color: var(--muted);
+        margin-left: 6px;
+      }
+      .sub {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .sub div {
+        background: #0f1317;
+        border-radius: 10px;
+        padding: 8px 4px;
+      }
+      .sub b {
+        display: block;
+        font-size: 20px;
+        font-variant-numeric: tabular-nums;
+      }
+      .sub span {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      #spectrum {
+        width: 100%;
+        height: 120px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+      }
+      .buttons {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      button,
+      .filelabel {
+        min-height: 52px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        font-size: 17px;
+        font-family: inherit;
+        padding: 0 16px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #04121a;
+        font-weight: 700;
+        min-height: 64px;
+        font-size: 20px;
+      }
+      button.on {
+        border-color: var(--good);
+        color: var(--good);
+      }
+      button:disabled {
+        opacity: 0.4;
+      }
+      input[type='text'] {
+        min-height: 52px;
+        width: 100%;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        font-size: 17px;
+        font-family: inherit;
+        padding: 0 16px;
+      }
+      .map-canvas {
+        flex: 1;
+        min-height: 320px;
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .mapslot {
+        flex: 1;
+        display: flex;
+        min-height: 320px;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+      }
+      .row > * {
+        flex: 1;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px 16px;
+        font-size: 15px;
+        line-height: 1.7;
+      }
+      .panel h2 {
+        margin: 0 0 8px;
+        font-size: 16px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .panel .big {
+        font-size: 26px;
+        font-weight: 700;
+      }
+      nav.tabs {
+        display: flex;
+        border-top: 1px solid var(--line);
+        background: var(--panel);
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+      nav.tabs button {
+        flex: 1;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--muted);
+        min-height: 58px;
+      }
+      nav.tabs button.active {
+        color: var(--accent);
+        box-shadow: inset 0 2px 0 var(--accent);
+      }
+      .suggest-pin {
+        background: var(--good);
+        color: #04120a;
+        font-weight: 700;
+        border-radius: 50%;
+        text-align: center;
+        line-height: 26px;
+      }
+      .leaflet-popup-content table {
+        border-collapse: collapse;
+        margin-top: 4px;
+      }
+      .leaflet-popup-content td {
+        padding: 1px 8px 1px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section id="screen-measure" class="screen active">
+        <div class="chips">
+          <span class="chip" id="micState">ไมค์ยังไม่เปิด</span>
+          <span class="chip" id="gpsState">GPS รอสัญญาณ</span>
+          <span class="chip" id="countState">0 จุด</span>
+        </div>
+
+        <div class="banner" id="banner"></div>
+
+        <div class="readout">
+          <div class="label">Δ เทียบจุดอ้างอิง</div>
+          <div class="delta"><span id="deltaValue">--.-</span><span class="unit">dB</span></div>
+          <div class="label" id="deltaHint">ยังไม่ได้วัด</div>
+          <div class="sub">
+            <div><b id="l10Value">--</b><span>L10</span></div>
+            <div><b id="meanValue">--</b><span>เฉลี่ย</span></div>
+            <div><b id="windValue">--</b><span>เหนือลม</span></div>
+          </div>
+        </div>
+
+        <canvas id="spectrum"></canvas>
+
+        <input type="text" id="pointName" placeholder="ชื่อจุด เช่น ปากซอย 5" />
+
+        <div class="buttons">
+          <button class="primary" id="btnMeasure">วัด 30 วิ</button>
+          <div class="row">
+            <button id="btnSetRef">ตั้งจุดอ้างอิง</button>
+            <button id="btnSavePoint">บันทึกจุด</button>
+          </div>
+          <button id="btnBeacon">เปิดโหมด beacon</button>
+        </div>
+      </section>
+
+      <section id="screen-map" class="screen">
+        <div class="mapslot" id="slot-map">
+          <div class="map-canvas" id="map-canvas"></div>
+        </div>
+        <div class="row">
+          <button id="btnLocate">ไปที่ตัวเอง</button>
+          <button id="btnPrefetch">โหลด tile พื้นที่นี้</button>
+        </div>
+        <div class="chips"><span class="chip" id="prefetchState">tile ยังไม่ได้โหลดไว้</span></div>
+      </section>
+
+      <section id="screen-result" class="screen">
+        <div class="mapslot" id="slot-result"></div>
+        <div class="panel" id="resultSummary"></div>
+        <div class="row">
+          <button id="btnExportPoints">export จุดที่วัด</button>
+          <button id="btnExportRefs">export beacon</button>
+        </div>
+        <div class="row">
+          <label class="filelabel" for="importFile">import CSV</label>
+          <input type="file" id="importFile" accept=".csv,text/csv" hidden />
+          <button id="btnSetHome">ตั้งบ้านตรงนี้</button>
+        </div>
+        <button id="btnClear">ล้างข้อมูลทั้งหมด</button>
+      </section>
+    </main>
+
+    <nav class="tabs">
+      <button data-screen="measure" class="active">วัด</button>
+      <button data-screen="map">แผนที่</button>
+      <button data-screen="result">ผลลัพธ์</button>
+    </nav>
+
+    <script src="vendor/leaflet/leaflet.js"></script>
+    <script type="module" src="app/main.js"></script>
+  </body>
+</html>
