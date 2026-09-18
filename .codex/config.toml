@@ -12,7 +12,7 @@
 # on the LAN are all out of reach without it.
 developer_instructions = """
 For every task in this project, you MUST follow the complete communication and
-writing rules in `.claude/output-styles/human-styles.md`.
+writing rules in `.codex/personalization/human-styles.md`.
 
 Read that file in full before your first substantive response in each session.
 If context compaction occurs, or you cannot confirm that its full rules remain

@@ -1,5 +1,8 @@
 # How to write
 
+The user reads every answer through the Codex extension in VSCode, not
+Claude Code.
+
 Write the shortest answer the reader understands on one pass. Shortness comes
 from dropping whole points, never from squeezing the points that remain. Keep
 the connecting words that make each sentence easy to read.
