@@ -2,7 +2,16 @@
 # Stop hook: desktop notification carrying the first line of the last assistant message.
 # macOS (osascript) / Windows (PowerShell toast) / Linux (notify-send).
 
-TITLE="${1:-Claude Code}"
+. "$(dirname "${BASH_SOURCE[0]}")/hook-lib.sh"
+
+# The project name is what tells two windows apart, so it carries the title, and a
+# runtime that names itself in $1 stays in front of it: "Codex: Ai Adapter".
+PROJECT_LABEL="$(hook_project_label)"
+if [ -n "${1:-}" ]; then
+  TITLE="$1${PROJECT_LABEL:+: $PROJECT_LABEL}"
+else
+  TITLE="${PROJECT_LABEL:-Claude Code}"
+fi
 STATUS="${2:-Done!}"
 # Each runtime gets its own sound, so a finished turn says which one finished without
 # looking. The caller sets these in .claude/settings.json or .codex/hooks.json; Claude

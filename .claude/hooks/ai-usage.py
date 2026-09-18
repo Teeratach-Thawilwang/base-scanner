@@ -7,7 +7,7 @@
 # SubagentStop are there for the last reply of a turn, the one no tool call follows.
 #
 # A reply is written to the transcript once per streamed block, every copy carrying the
-# same `msg_...` id, and that id is what makes them one request. The transcript is only
+# same response id, and that id is what makes them one request. The transcript is only
 # appended to, so each pass reads the bytes added since the last one and nothing else.
 
 import datetime
@@ -33,14 +33,17 @@ TOKENS = "tokens"
 # Tokens are input, output, cache write and cache read added together, and cache read
 # is most of that: a long context is re-read on every turn, which is how a run that
 # looks quiet empties a five-hour quota.
-FIVE_MINUTE_REQUEST_LIMIT = 60
-FIVE_MINUTE_TOKEN_LIMIT = 10_000_000
-HOURLY_REQUEST_LIMIT = 150
-HOURLY_TOKEN_LIMIT = 30_000_000
+FIVE_MINUTE_REQUEST_LIMIT = 200
+FIVE_MINUTE_TOKEN_LIMIT = 50_000_000
+HOURLY_REQUEST_LIMIT = 600
+HOURLY_TOKEN_LIMIT = 100_000_000
 NOTIFY_ON_BLOCK = True
-# `CLAUDE_RATE_LIMIT_OFF=1 claude` runs that session uncapped and leaves Codex capped.
-# RATE_LIMIT_OFF is the pair's master switch, kept because wanting both uncapped at once
-# is the common case and wanting one of them is the rare one.
+# The switch, for when there is no shell to export a variable in: True leaves every session
+# of this runtime uncapped however it was launched, False puts the caps back.
+RATE_LIMIT_OFF = True
+# The variables still work and still win, which is how one session gets uncapped without
+# uncapping the rest. `CLAUDE_RATE_LIMIT_OFF=1 claude` does that one; RATE_LIMIT_OFF=1
+# uncaps both runtimes at once and codex-usage.py reads it too.
 OFF_SWITCH_VARIABLES = ("CLAUDE_RATE_LIMIT_OFF", "RATE_LIMIT_OFF")
 USD_TO_THB = 34
 # --------------------------------------------------------------------------
@@ -63,8 +66,45 @@ PRICE_PER_MILLION_TOKENS_USD = {
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_create": 1.25, "cache_read": 0.10},
     "gpt-5-mini": {"input": 0.25, "output": 2.00, "cache_create": 0.25, "cache_read": 0.025},
     "gpt-5-nano": {"input": 0.05, "output": 0.40, "cache_create": 0.05, "cache_read": 0.005},
+    # z.ai's model behind the litellm proxy. The transcript records it as
+    # `z-ai/glm-5.3-flash`, the OpenRouter id, because that is what Claude Code asks the
+    # proxy for; the substring match below is what lets one key cover both spellings.
+    # OpenRouter lists one flat rate -- no peak/off-peak clock, so it is not tiered.
+    # cache_create matches input the way DeepSeek's does: GLM caches implicitly and bills
+    # the first send of it at the miss rate rather than charging to write the entry.
+    "glm-5.3-flash": {"input": 0.15, "output": 0.50, "cache_create": 0.15, "cache_read": 0.03},
+    # Alibaba's model behind the litellm proxy, recorded the same way: the transcript holds
+    # `qwen/qwen3.8-flash`, the OpenRouter id, and the substring match below lets the short
+    # key cover it. One flat OpenRouter rate, so no tier here either. cache_create matches
+    # input for the same reason it does for GLM: the cache is implicit, and the first send of
+    # a prefix is billed at the miss rate rather than as a separate write.
+    "qwen3.8-flash": {"input": 0.15, "output": 0.47, "cache_create": 0.15, "cache_read": 0.016},
 }
 FALLBACK_PRICE = PRICE_PER_MILLION_TOKENS_USD["claude-opus-5"]
+
+# A model whose price changes with the clock rather than with the request. DeepSeek sells
+# one model at two rates, peak being double off-peak, and it applies 01:00-04:00 and
+# 06:00-10:00 UTC on a weekday, which is 08:00-11:00 and 13:00-17:00 in Bangkok, the middle
+# of a working day. cache_create matches input because DeepSeek charges nothing to write a
+# cache entry and bills the first send of it at the miss rate.
+TIERED_PRICE_PER_MILLION_TOKENS_USD = {
+    # The direct config, where the transcript holds DeepSeek's own model name.
+    "deepseek-flash": {
+        "peak": {"input": 0.30, "output": 1.20, "cache_create": 0.30, "cache_read": 0.006},
+        "off_peak": {"input": 0.15, "output": 0.60, "cache_create": 0.15, "cache_read": 0.003},
+    },
+    # The same model reached through OpenRouter, which is why the transcript holds
+    # `deepseek/deepseek-v4.1-flash` instead. That id carries none of the `deepseek-flash`
+    # above, so without its own key every reply falls to the fallback price, the Opus one.
+    # The clock still decides what is billed: measured against OpenRouter's own record,
+    # a generation inside a peak window comes back at the rates below in `peak`, and the
+    # endpoint's listed price moves with them, so this is not a rate that can stay flat.
+    "deepseek-v4.1-flash": {
+        "peak": {"input": 0.30, "output": 1.20, "cache_create": 0.30, "cache_read": 0.006},
+        "off_peak": {"input": 0.15, "output": 0.60, "cache_create": 0.15, "cache_read": 0.003},
+    },
+}
+PEAK_HOURS_UTC = ((1, 4), (6, 10))
 
 USAGE_FIELD = {
     "input": "input_tokens",
@@ -102,7 +142,6 @@ STALE_TRANSCRIPT_SECONDS = 6 * 60 * 60
 SECONDS_PER_MINUTE = 60
 TOKENS_PER_MILLION = 1_000_000
 
-REPLY_ID_PREFIX = "msg_"
 SYNTHETIC_MODEL = "<synthetic>"  # a message Claude Code wrote itself, nothing was asked of the API
 TRANSCRIPT_ID_LENGTH = 12
 REPLY_ID_LENGTH = 8
@@ -128,6 +167,8 @@ BLOCK_INSTRUCTION = (
 
 
 def cap_is_on():
+    if RATE_LIMIT_OFF:
+        return False
     return not any(os.environ.get(name, "") == "1" for name in OFF_SWITCH_VARIABLES)
 
 
@@ -151,13 +192,17 @@ def parse_record(line):
     return record if isinstance(record, dict) else {}
 
 
+# The id is what marks a record as a real reply rather than something Claude Code wrote
+# for itself, and its shape is the provider's to choose: a Claude reply carries `msg_...`,
+# a reply that came back through a proxy may carry a bare uuid. Only its being there is
+# what this can rely on, and `<synthetic>` is what keeps the self-written ones out.
 def is_assistant_reply(record):
     message = record.get("message")
     return (
         isinstance(message, dict)
         and message.get("role") == "assistant"
         and isinstance(message.get("usage"), dict)
-        and str(message.get("id", "")).startswith(REPLY_ID_PREFIX)
+        and bool(message.get("id"))
         and message.get("model") != SYNTHETIC_MODEL
     )
 
@@ -264,19 +309,38 @@ def session_transcripts(transcript_path):
     return [root, *sorted(subagents)]
 
 
-def price_of(model):
+def flat_price_of(model):
     for known_model in sorted(PRICE_PER_MILLION_TOKENS_USD, key=len, reverse=True):
         if known_model in model:
             return PRICE_PER_MILLION_TOKENS_USD[known_model]
-    return FALLBACK_PRICE
+    return None
+
+
+def is_peak_hour(spent_at):
+    moment = datetime.datetime.fromtimestamp(spent_at, datetime.timezone.utc)
+    if moment.weekday() > 4:
+        return False
+    return any(start <= moment.hour < end for start, end in PEAK_HOURS_UTC)
+
+
+def tiered_price_of(model, spent_at):
+    for known_model in sorted(TIERED_PRICE_PER_MILLION_TOKENS_USD, key=len, reverse=True):
+        if known_model in model:
+            rates = TIERED_PRICE_PER_MILLION_TOKENS_USD[known_model]
+            return rates["peak"] if is_peak_hour(spent_at) else rates["off_peak"]
+    return None
+
+
+def price_of(model, spent_at):
+    return tiered_price_of(model, spent_at) or flat_price_of(model) or FALLBACK_PRICE
 
 
 def token_counts(usage):
     return {kind: usage.get(field, 0) for kind, field in USAGE_FIELD.items()}
 
 
-def costs_in_usd(model, tokens):
-    price = price_of(model)
+def costs_in_usd(model, tokens, spent_at):
+    price = price_of(model, spent_at)
     return {kind: count * price[kind] / TOKENS_PER_MILLION for kind, count in tokens.items()}
 
 
@@ -391,7 +455,7 @@ def entries_for_new_replies(entry, chunk, name, log_cutoff, moments):
         if spent_at < log_cutoff:
             continue
 
-        costs = costs_in_usd(message.get("model", "unknown"), tokens)
+        costs = costs_in_usd(message.get("model", "unknown"), tokens, spent_at)
         thb = converted_to(USD_TO_THB, costs)
         usd = converted_to(1, costs)
         add_to_running_totals(entry, thb, usd, tokens)

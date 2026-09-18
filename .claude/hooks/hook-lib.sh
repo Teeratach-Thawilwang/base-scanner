@@ -121,3 +121,14 @@ hook_project_root() {
   git rev-parse --show-toplevel 2>/dev/null && return 0
   pwd
 }
+
+# The folder says ai-adapter, a notification wants Ai Adapter: separators become spaces
+# and every word is capitalized, so the title reads as a name rather than a path.
+hook_project_label() {
+  local words word label=
+  words=$(basename "$(hook_project_root)" | tr '-' ' ' | tr '_' ' ')
+  for word in $words; do
+    label="$label $(printf '%s' "${word:0:1}" | tr '[:lower:]' '[:upper:]')${word:1}"
+  done
+  printf '%s' "${label# }"
+}

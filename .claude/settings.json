@@ -34,7 +34,6 @@
       "mcp__playwright__browser_wait_for"
     ],
     "deny": [
-      "mcp__comfyui",
       "ScheduleWakeup",
       "CronCreate",
       "CronDelete",

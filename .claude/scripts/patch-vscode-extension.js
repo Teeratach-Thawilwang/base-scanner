@@ -48,7 +48,7 @@ const os = require('os')
 const path = require('path')
 const { execFileSync } = require('child_process')
 
-const MARKER = '/*ccpatch:v8*/'
+const MARKER = '/*ccpatch:v9*/'
 const MARKER_ANY = /\/\*ccpatch:v\d+\*\//
 const BACKUP_SUFFIX = '.ccpatch-backup'
 
@@ -70,17 +70,22 @@ const ID = '[A-Za-z_$][\\w$]*'
 // Only the signature is consumed. The path and fs module names are read out of
 // the body through lookaheads instead, because what sits between them is
 // rewritten on nearly every release: 2.1.263 resolved the path in one
-// expression, 2.1.268 walks the workspace folders first. All the prelude needs
-// is the first brace to sit behind, and those two names.
+// expression, 2.1.268 walks the workspace folders first, 2.1.276 walks them
+// into a list and adds a trailing options argument. All the prelude needs is
+// the first brace to sit behind, the first argument, and those two names, so
+// the rest of the parameter list is matched but not kept.
 const HOST_HEAD = new RegExp(
-  `async openFile\\((${ID}),\\s*(${ID})\\)\\{` +
-    `(?=[\\s\\S]{0,800}?(${ID})\\.isAbsolute\\(\\1\\))` +
-    `(?=[\\s\\S]{0,800}?(${ID})\\.existsSync\\()`
+  `async openFile\\((${ID})(?:\\s*,\\s*${ID})*\\)\\{` +
+    `(?=[\\s\\S]{0,1500}?(${ID})\\.isAbsolute\\(\\1\\))` +
+    `(?=[\\s\\S]{0,1500}?(${ID})\\.existsSync\\()`
 )
 
-// }catch{}_$.window.showTextDocument(X).then((z)=>{
+// }catch{}_$.window.showTextDocument(X).then((z)=>{ and, since 2.1.276,
+// }catch{}let K=X?.pinned?{preview:!1}:void 0;X.window.showTextDocument(Y,K)
+// The option built in between is kept and put back in front, and the argument
+// tail travels with the call so a pinned tab still opens pinned.
 const HOST_TAIL = new RegExp(
-  `\\}catch\\{\\}(${ID})\\.window\\.showTextDocument\\((${ID})\\)\\.then\\(\\((${ID})\\)=>\\{`
+  `\\}catch\\{\\}([\\s\\S]{0,300}?)(${ID})\\.window\\.showTextDocument\\((${ID})([\\s\\S]{0,60}?)\\)\\.then\\(\\((${ID})\\)=>\\{`
 )
 
 // default-src 'none'; ${q}; ${N}; ${Z}; script-src 'nonce-${V}'; ${D};
@@ -97,14 +102,24 @@ const WEBVIEW_SEND_SELECTION = new RegExp(
   `if\\((${ID})&&!(${ID})\\(this\\.lastSentSelection,this\\.selection\\.value\\)\\)`
 )
 
-// Y&&D("div",{className:_7.divider}),Y&&D(k55,{includeSelection:G??!1,currentSelection:Y,onToggle:z??(()=>{})})
+// Y&&D("div",{className:_7.divider}) , Y&&D(k55,{includeSelection:G??!1,currentSelection:Y,onToggle:z??(()=>{})})
+// Y&&F("div",{className:H7.divider}) , Y&&F(o75,{currentSelection:Y,onRemove:G})
 // The chip in the composer footer and the divider that only exists to sit
-// next to it. Both hang off the same currentSelection, so both go.
-const WEBVIEW_SELECTION_CHIP = new RegExp(
+// next to it. Both hang off the same currentSelection, so both go. 2.1.276
+// traded the include flag and the toggle for a plain onRemove, so both shapes
+// are listed and whichever one the bundle carries is the one that lands.
+const WEBVIEW_SELECTION_CHIP_LEGACY = new RegExp(
   `(${ID})&&(${ID})\\("div",\\{className:(${ID})\\.divider\\}\\),` +
     `\\1&&\\2\\((${ID}),\\{includeSelection:(${ID})\\?\\?!1,currentSelection:\\1,` +
     `onToggle:(${ID})\\?\\?\\(\\(\\)=>\\{\\}\\)\\}\\)`
 )
+
+const WEBVIEW_SELECTION_CHIP = new RegExp(
+  `(${ID})&&(${ID})\\("div",\\{className:(${ID})\\.divider\\}\\),` +
+    `\\1&&\\2\\((${ID}),\\{currentSelection:\\1,onRemove:(${ID})\\}\\)`
+)
+
+const WEBVIEW_SELECTION_CHIP_SHAPES = [WEBVIEW_SELECTION_CHIP, WEBVIEW_SELECTION_CHIP_LEGACY]
 
 // D(i05,{window:ex($.promptCacheRecord.value,Date.now())})
 // What the footer's cache countdown renders. The two hook calls in front of it
@@ -131,8 +146,8 @@ function patchHost(src) {
   if (countMatches(src, HOST_HEAD) !== 1) throw new Error('openFile() head matched more than once')
   if (countMatches(src, HOST_TAIL) !== 1) throw new Error('showTextDocument() call matched more than once')
 
-  const [, argPath, , pathMod, fsMod] = head
-  const [, vscodeMod, uriVar, thenArg] = tail
+  const [, argPath, pathMod, fsMod] = head
+  const [, between, vscodeMod, uriVar, extraArgs, thenArg] = tail
 
   // Fix 2 and 3: decode the percent-encoded href and expand a leading ~/.
   // The decode only wins when the raw path does not exist, so a filename that
@@ -154,10 +169,11 @@ function patchHost(src) {
   // in the explorer only when even that fails.
   out = out.replace(
     HOST_TAIL,
-    () =>
-      `}catch{}if(/\\.(${MEDIA})$/i.test(${uriVar}.fsPath))` +
+    (_m, between, vscodeMod, uriVar, extraArgs, thenArg) =>
+      `}catch{}${between}` +
+      `if(/\\.(${MEDIA})$/i.test(${uriVar}.fsPath))` +
       `{${vscodeMod}.commands.executeCommand("vscode.open",${uriVar});return}` +
-      `${vscodeMod}.window.showTextDocument(${uriVar})` +
+      `${vscodeMod}.window.showTextDocument(${uriVar}${extraArgs})` +
       `.catch(()=>{Promise.resolve(${vscodeMod}.commands.executeCommand("vscode.open",${uriVar}))` +
       `.then(void 0,()=>${vscodeMod}.commands.executeCommand("revealInExplorer",${uriVar}));return null})` +
       `.then((${thenArg})=>{if(!${thenArg})return;`
@@ -193,8 +209,11 @@ function patchWebviewSelection(src) {
   const sends = countMatches(src, WEBVIEW_SEND_SELECTION)
   if (sends !== 1) throw new Error(`selection read matched ${sends} times, expected exactly 1`)
 
-  const chips = countMatches(src, WEBVIEW_SELECTION_CHIP)
-  if (chips !== 1) throw new Error(`selection chip matched ${chips} times, expected exactly 1`)
+  const chip = WEBVIEW_SELECTION_CHIP_SHAPES.find((re) => countMatches(src, re) === 1)
+  if (!chip) {
+    const counts = WEBVIEW_SELECTION_CHIP_SHAPES.map((re) => countMatches(src, re)).join(' or ')
+    throw new Error(`selection chip matched ${counts} times, expected exactly 1 of one shape`)
+  }
 
   return src
     .replace(
@@ -202,7 +221,7 @@ function patchWebviewSelection(src) {
       (_m, _flag, sameAs) =>
         `if(${MARKER}!1&&!${sameAs}(this.lastSentSelection,this.selection.value))`
     )
-    .replace(WEBVIEW_SELECTION_CHIP, () => `${MARKER}null,null`)
+    .replace(chip, () => `${MARKER}null,null`)
 }
 
 // Fix 8: the prompt cache countdown leaves the footer.

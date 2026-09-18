@@ -4,7 +4,16 @@
 # runtime's name arrives as $1 so the toast says which one is waiting.
 # macOS (osascript) / Windows (PowerShell toast) / Linux (notify-send).
 
-TITLE="${1:-Claude Code}"
+. "$(dirname "${BASH_SOURCE[0]}")/hook-lib.sh"
+
+# The project name is what tells two windows apart, so it carries the title, and a
+# runtime that names itself in $1 stays in front of it: "Codex: Ai Adapter".
+PROJECT_LABEL="$(hook_project_label)"
+if [ -n "${1:-}" ]; then
+  TITLE="$1${PROJECT_LABEL:+: $PROJECT_LABEL}"
+else
+  TITLE="${PROJECT_LABEL:-Claude Code}"
+fi
 STATUS="มีคำถามรอตอบ"
 MAC_SOUND="kuay-anutin"
 WINDOWS_SOUND="ms-winsoundevent:Notification.Reminder"
