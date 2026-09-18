@@ -22,5 +22,5 @@ user instruction says to hurry.
 - **Connection and DB name come from the repo's `.env`** (`MONGODB_URI` / `MONGODB_DB`) — look them
   up directly, don't ask. Never hardcode a DB name.
 
-A read you are about to hand-write a script for is [the db-inspect skill](../skills/db-inspect/SKILL.md)
+A read you are about to hand-write a script for is [the mongo-inspect skill](../skills/mongo-inspect/SKILL.md)
 — use it instead.
