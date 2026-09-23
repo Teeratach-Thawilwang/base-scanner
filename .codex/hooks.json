@@ -19,8 +19,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "NOTIFY_MAC_SOUND=Funk-Louder-8dB NOTIFY_WINDOWS_SOUND=ms-winsoundevent:Notification.IM bash \"$(git rev-parse --show-toplevel)/.claude/hooks/notify-done.sh\" Codex",
-            "commandWindows": "NOTIFY_MAC_SOUND=Funk-Louder-8dB NOTIFY_WINDOWS_SOUND=ms-winsoundevent:Notification.IM bash \"$(git rev-parse --show-toplevel)/.claude/hooks/notify-done.sh\" Codex",
+            "command": "NOTIFY_MAC_SOUND=Funk-Louder NOTIFY_WINDOWS_SOUND=ms-winsoundevent:Notification.IM bash \"$(git rev-parse --show-toplevel)/.claude/hooks/notify-done.sh\" Codex",
+            "commandWindows": "NOTIFY_MAC_SOUND=Funk-Louder NOTIFY_WINDOWS_SOUND=ms-winsoundevent:Notification.IM bash \"$(git rev-parse --show-toplevel)/.claude/hooks/notify-done.sh\" Codex",
             "statusMessage": "Notifying",
             "timeout": 15
           },
