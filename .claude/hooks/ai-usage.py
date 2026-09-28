@@ -1,67 +1,23 @@
 #!/usr/bin/env python3
-# PreToolUse, Stop and SubagentStop hook: write down every API request as it happens,
-# and refuse the next tool call once a window's budget is gone.
-#
-# PreToolUse is the only hook that runs in the gap between two API requests, so it is
-# what makes the log live and lets the cap stop a run before the turn ends. Stop and
-# SubagentStop are there for the last reply of a turn, the one no tool call follows.
-#
-# A reply is written to the transcript once per streamed block, every copy carrying the
-# same response id, and that id is what makes them one request. The transcript is only
-# appended to, so each pass reads the bytes added since the last one and nothing else.
-
 import datetime
 import glob
 import json
 import os
-import subprocess
 import sys
 import time
 
 from hook_lib import FILE_ENCODING, exclusive_lock, load_state, logs_directory, read_event, save_state
 
-REQUESTS = "requests"
-TOKENS = "tokens"
-
-# --- settings, edit these -------------------------------------------------
-# Measured over this project's own transcripts. Five minutes of real work:
-#   requests   median 7      p90 18      p95 24      worst 53
-#   tokens     median 1.0M   p90 3.1M    p95 4.5M    worst 12.2M
-# One hour of real work:
-#   requests   median 41     p90 135     p95 144     worst 188
-#   tokens     median 5.7M   p90 21.3M   p95 24.8M   worst 38.6M
-# Tokens are input, output, cache write and cache read added together, and cache read
-# is most of that: a long context is re-read on every turn, which is how a run that
-# looks quiet empties a five-hour quota.
-FIVE_MINUTE_REQUEST_LIMIT = 200
-FIVE_MINUTE_TOKEN_LIMIT = 50_000_000
-HOURLY_REQUEST_LIMIT = 600
-HOURLY_TOKEN_LIMIT = 100_000_000
-NOTIFY_ON_BLOCK = True
-# The switch, for when there is no shell to export a variable in: True leaves every session
-# of this runtime uncapped however it was launched, False puts the caps back.
-RATE_LIMIT_OFF = True
-# The variables still work and still win, which is how one session gets uncapped without
-# uncapping the rest. `CLAUDE_RATE_LIMIT_OFF=1 claude` does that one; RATE_LIMIT_OFF=1
-# uncaps both runtimes at once and codex-usage.py reads it too.
-OFF_SWITCH_VARIABLES = ("CLAUDE_RATE_LIMIT_OFF", "RATE_LIMIT_OFF")
 USD_TO_THB = 34
-# --------------------------------------------------------------------------
-
-# window in minutes, what is counted, how much of it is allowed
-BUDGETS = (
-    (5, REQUESTS, FIVE_MINUTE_REQUEST_LIMIT),
-    (5, TOKENS, FIVE_MINUTE_TOKEN_LIMIT),
-    (60, REQUESTS, HOURLY_REQUEST_LIMIT),
-    (60, TOKENS, HOURLY_TOKEN_LIMIT),
-)
 
 PRICE_PER_MILLION_TOKENS_USD = {
     "claude-fable-5": {"input": 10.00, "output": 50.00, "cache_create": 12.50, "cache_read": 1.00},
+    "claude-opus-5-5": {"input": 4.00, "output": 20.00, "cache_create": 5.00, "cache_read": 0.20},
     "claude-opus-5": {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
     "claude-opus-4-8": {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
     "claude-opus-4-6": {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
-    "claude-sonnet-5": {"input": 3.00, "output": 15.00, "cache_create": 3.75, "cache_read": 0.30},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_create": 2.50, "cache_read": 0.20},
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00, "cache_create": 2.50, "cache_read": 0.20},
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "cache_create": 3.75, "cache_read": 0.30},
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_create": 1.25, "cache_read": 0.10},
     "gpt-5-mini": {"input": 0.25, "output": 2.00, "cache_create": 0.25, "cache_read": 0.025},
@@ -70,18 +26,8 @@ PRICE_PER_MILLION_TOKENS_USD = {
     "gpt-6-sol": {"input": 2.00, "output": 10.00, "cache_create": 2.50, "cache_read": 0.20},
     "gpt-5.6-terra": {"input": 2.00, "output": 12.00, "cache_create": 2.50, "cache_read": 0.20},
     "gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_create": 0.125, "cache_read": 0.01},
-    # z.ai's model behind the litellm proxy. The transcript records it as
-    # `z-ai/glm-5.3-flash`, the OpenRouter id, because that is what Claude Code asks the
-    # proxy for; the substring match below is what lets one key cover both spellings.
-    # OpenRouter lists one flat rate -- no peak/off-peak clock, so it is not tiered.
-    # cache_create matches input the way DeepSeek's does: GLM caches implicitly and bills
-    # the first send of it at the miss rate rather than charging to write the entry.
+    # Implicit cache writes are billed at the input miss rate on OpenRouter.
     "glm-5.3-flash": {"input": 0.15, "output": 0.50, "cache_create": 0.15, "cache_read": 0.03},
-    # Alibaba's model behind the litellm proxy, recorded the same way: the transcript holds
-    # `qwen/qwen3.8-flash`, the OpenRouter id, and the substring match below lets the short
-    # key cover it. One flat OpenRouter rate, so no tier here either. cache_create matches
-    # input for the same reason it does for GLM: the cache is implicit, and the first send of
-    # a prefix is billed at the miss rate rather than as a separate write.
     "qwen3.8-flash": {"input": 0.15, "output": 0.47, "cache_create": 0.15, "cache_read": 0.016},
 }
 LONG_CONTEXT_PRICE_PER_MILLION_TOKENS_USD = {
@@ -92,23 +38,11 @@ LONG_CONTEXT_PRICE_PER_MILLION_TOKENS_USD = {
 LONG_CONTEXT_INPUT_TOKENS = 272_000
 FALLBACK_PRICE = PRICE_PER_MILLION_TOKENS_USD["claude-opus-5"]
 
-# A model whose price changes with the clock rather than with the request. DeepSeek sells
-# one model at two rates, peak being double off-peak, and it applies 01:00-04:00 and
-# 06:00-10:00 UTC on a weekday, which is 08:00-11:00 and 13:00-17:00 in Bangkok, the middle
-# of a working day. cache_create matches input because DeepSeek charges nothing to write a
-# cache entry and bills the first send of it at the miss rate.
 TIERED_PRICE_PER_MILLION_TOKENS_USD = {
-    # The direct config, where the transcript holds DeepSeek's own model name.
     "deepseek-flash": {
         "peak": {"input": 0.30, "output": 1.20, "cache_create": 0.30, "cache_read": 0.006},
         "off_peak": {"input": 0.15, "output": 0.60, "cache_create": 0.15, "cache_read": 0.003},
     },
-    # The same model reached through OpenRouter, which is why the transcript holds
-    # `deepseek/deepseek-v4.1-flash` instead. That id carries none of the `deepseek-flash`
-    # above, so without its own key every reply falls to the fallback price, the Opus one.
-    # The clock still decides what is billed: measured against OpenRouter's own record,
-    # a generation inside a peak window comes back at the rates below in `peak`, and the
-    # endpoint's listed price moves with them, so this is not a rate that can stay flat.
     "deepseek-v4.1-flash": {
         "peak": {"input": 0.30, "output": 1.20, "cache_create": 0.30, "cache_read": 0.006},
         "off_peak": {"input": 0.15, "output": 0.60, "cache_create": 0.15, "cache_read": 0.003},
@@ -129,8 +63,7 @@ SETTLE_TIMEOUT_SECONDS = 3.0
 SETTLE_STABLE_SECONDS = 0.4
 SETTLE_POLL_SECONDS = 0.2
 
-# A transcript met for the first time is history, not a burst: it seeds the budget so the
-# cap knows what the last hour cost, and only its newest replies are written to the log.
+# Do not backfill old conversations into the current project's usage log.
 CATCHUP_SECONDS = 60
 MOMENTS_KEPT = 200
 LOGGED_IDS_KEPT = 2000
@@ -143,49 +76,23 @@ LOG_FILENAME = "ai-requests.log"
 STATE_FILENAME = ".ai-usage-state.json"
 LOCK_FILENAME = ".ai-usage.lock"
 
-NOTIFY_SCRIPT = "notify-done.sh"
-NOTIFY_TITLE = "Claude Code hit the API cap"
-NOTIFY_COOLDOWN_SECONDS = 120
-NOTIFY_TIMEOUT_SECONDS = 5
-
 STALE_TRANSCRIPT_SECONDS = 6 * 60 * 60
-SECONDS_PER_MINUTE = 60
 TOKENS_PER_MILLION = 1_000_000
 
-SYNTHETIC_MODEL = "<synthetic>"  # a message Claude Code wrote itself, nothing was asked of the API
+SYNTHETIC_MODEL = "<synthetic>"
 TRANSCRIPT_ID_LENGTH = 12
 REPLY_ID_LENGTH = 8
-SESSION_ID_LENGTH = 8
 STORED_MONEY_DECIMALS = 4
 LOGGED_COST_DECIMALS = 2
 LOGGED_BREAKDOWN_DECIMALS = 4
 FIELD_SEPARATOR = " | "
 CONVERSATION_FIELD = "conv="
 ID_FIELD = "id="
-BLOCKED_EVENT = "event=rate-limit-block"
 
 COMMAND_NAME_OPEN = "<command-name>"
 COMMAND_NAME_CLOSE = "</command-name>"
 
-BLOCK_INSTRUCTION = (
-    "[rate-limit] BLOCKED: {spent} {metric} in the last {minutes} minutes, the cap is {limit}.\n"
-    "Stop here. Do not retry this call, do not reach for a different tool, and do not start a subagent — "
-    "every retry is one more request against the same cap.\n"
-    "End the turn now with one line saying what you were doing and what is left. "
-    "The user has been notified and decides what happens next."
-)
 
-
-def cap_is_on():
-    if RATE_LIMIT_OFF:
-        return False
-    return not any(os.environ.get(name, "") == "1" for name in OFF_SWITCH_VARIABLES)
-
-
-# This hook prices Anthropic tokens off a Claude transcript. A Codex rollout holds neither:
-# its usage lives in token_count events and a ChatGPT plan is metered in credits, not tokens.
-# So .codex/hooks.json never calls this, and a rollout arriving anyway is left alone rather
-# than scanned for records it cannot contain.
 def is_codex_rollout(transcript_path):
     try:
         with open(transcript_path, encoding=FILE_ENCODING, errors="replace") as transcript:
@@ -202,10 +109,6 @@ def parse_record(line):
     return record if isinstance(record, dict) else {}
 
 
-# The id is what marks a record as a real reply rather than something Claude Code wrote
-# for itself, and its shape is the provider's to choose: a Claude reply carries `msg_...`,
-# a reply that came back through a proxy may carry a bare uuid. Only its being there is
-# what this can rely on, and `<synthetic>` is what keeps the self-written ones out.
 def is_assistant_reply(record):
     message = record.get("message")
     return (
@@ -222,11 +125,6 @@ def epoch_of(timestamp):
         return datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
     except (AttributeError, ValueError):
         return 0
-
-
-def iso_of(moment):
-    stamped = datetime.datetime.fromtimestamp(moment, datetime.timezone.utc)
-    return stamped.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def unread_lines(transcript_path, offset):
@@ -297,8 +195,6 @@ def agent_type_of(transcript_path):
         return ""
 
 
-# Claude Code writes no ai-title record for a session whose prompts are all slash commands,
-# and none at all for a subagent, which borrows the name of the session that spawned it.
 def conversation_name(entry, transcript_path, session_name):
     own = entry["title"] or entry["command"]
     if own:
@@ -309,8 +205,6 @@ def conversation_name(entry, transcript_path, session_name):
     return without_field_separators(f"{session_name} ({agent})" if agent else session_name)
 
 
-# A subagent keeps its own transcript in a folder beside the session's, and the session's own
-# file records nothing of what that subagent spent, so every file in the folder gets read too.
 def session_transcripts(transcript_path):
     folder = os.path.dirname(transcript_path)
     parent = os.path.dirname(folder) + TRANSCRIPT_SUFFIX
@@ -436,7 +330,7 @@ def empty_entry():
         "title": "",
         "command": "",
         "name": "",
-        "spend": {},  # one reply is [epoch seconds, tokens], keyed by the id that makes it one request
+        "last_reply_id": "",
         "moments": {},
         "logged_ids": [],
         "cumulative_thb": 0.0,
@@ -447,7 +341,10 @@ def empty_entry():
 
 def entry_for(transcripts, transcript_path):
     stored = transcripts.get(transcript_path, {})
-    return {key: stored.get(key, default) for key, default in empty_entry().items()}
+    entry = {key: stored.get(key, default) for key, default in empty_entry().items()}
+    if not entry["last_reply_id"] and stored.get("spend"):
+        entry["last_reply_id"] = next(reversed(stored["spend"]))
+    return entry
 
 
 def remember(entry, chunk):
@@ -461,12 +358,12 @@ def entries_for_new_replies(entry, chunk, name, log_cutoff, moments):
     for record in chunk["replies"]:
         message = record["message"]
         reply_id = message["id"]
-        if reply_id in entry["spend"]:
+        if reply_id == entry["last_reply_id"]:
             continue
+        entry["last_reply_id"] = reply_id
 
         tokens = token_counts(message["usage"])
         spent_at = epoch_of(record.get("timestamp", ""))
-        entry["spend"][reply_id] = [spent_at, sum(tokens.values())]
         if spent_at < log_cutoff:
             continue
 
@@ -501,8 +398,6 @@ def renamed(line, ids, name):
     return FIELD_SEPARATOR.join(CONVERSATION_FIELD + name if field.startswith(CONVERSATION_FIELD) else field for field in fields)
 
 
-# The title only arrives once the session has a few turns behind it, so the lines already
-# written under a placeholder get the real name put on them here.
 def rename_logged_replies(log_file, ids, name):
     if not ids or not os.path.exists(log_file):
         return
@@ -520,80 +415,6 @@ def append_lines(log_file, lines):
     with open(log_file, "a", encoding=FILE_ENCODING) as log:
         for line in lines:
             log.write(line + "\n")
-
-
-def still_in_budget(spend, oldest_kept):
-    return {reply_id: entry for reply_id, entry in spend.items() if isinstance(entry, list) and len(entry) == 2 and entry[0] >= oldest_kept}
-
-
-def longest_budget_seconds():
-    return max(minutes for minutes, _, _ in BUDGETS) * SECONDS_PER_MINUTE
-
-
-def pruned(transcripts, now):
-    oldest_kept = now - longest_budget_seconds()
-    kept = {}
-    for transcript_path, entry in transcripts.items():
-        entry["spend"] = still_in_budget(entry["spend"], oldest_kept)
-        if entry["spend"] or now - entry["seen_at"] < STALE_TRANSCRIPT_SECONDS:
-            kept[transcript_path] = entry
-    return kept
-
-
-def spent_since(transcripts, oldest_counted):
-    spends = [spend for entry in transcripts.values() for spend in entry["spend"].values() if spend[0] >= oldest_counted]
-    return {REQUESTS: len(spends), TOKENS: sum(spend[1] for spend in spends)}
-
-
-def spend_per_budget(transcripts, now):
-    windows = {minutes: spent_since(transcripts, now - minutes * SECONDS_PER_MINUTE) for minutes, _, _ in BUDGETS}
-    return [(minutes, metric, windows[minutes][metric], limit) for minutes, metric, limit in BUDGETS]
-
-
-def first_breach(spend):
-    for budget in spend:
-        if budget[2] >= budget[3]:
-            return budget
-    return None
-
-
-def readable(metric, amount):
-    if metric != TOKENS:
-        return f"{amount:,}"
-    return f"{amount / TOKENS_PER_MILLION:.1f}M"
-
-
-def due_for_notice(state, session_id, now):
-    if not NOTIFY_ON_BLOCK:
-        return False
-    notified_at = state.setdefault("notified_at", {})
-    if now - notified_at.get(session_id, 0) < NOTIFY_COOLDOWN_SECONDS:
-        return False
-    notified_at[session_id] = now
-    return True
-
-
-def notify(breach):
-    minutes, metric, spent, limit = breach
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), NOTIFY_SCRIPT)
-    status = f"{readable(metric, spent)} {metric} in {minutes} min, cap is {readable(metric, limit)}. Tool calls blocked — press Esc."
-    try:
-        subprocess.run(["bash", script, NOTIFY_TITLE, status], stdin=subprocess.DEVNULL, timeout=NOTIFY_TIMEOUT_SECONDS, check=False)
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-
-def blocked_line(breach, spend, tool_name, session_id, now):
-    return FIELD_SEPARATOR.join(
-        [
-            BLOCKED_EVENT,
-            f"breached={breach[0]}m/{breach[1]}",
-            *(f"{minutes}m/{metric}={spent}/{limit}" for minutes, metric, spent, limit in spend),
-            f"tool={tool_name}",
-            f"session={session_id[:SESSION_ID_LENGTH]}",
-            iso_of(now),
-        ]
-    )
 
 
 def absorb(transcripts, transcript_path, log_file, now, session_name):
@@ -625,8 +446,10 @@ def account_for(state, transcript_path, log_file, now):
         if os.path.isfile(path):
             name = absorb(transcripts, path, log_file, now, session_name)
             session_name = session_name or name
-    state["transcripts"] = pruned(transcripts, now)
-    return spend_per_budget(state["transcripts"], now)
+    state["transcripts"] = {
+        path: entry for path, entry in transcripts.items()
+        if now - entry["seen_at"] < STALE_TRANSCRIPT_SECONDS
+    }
 
 
 def main():
@@ -638,39 +461,26 @@ def main():
     if not os.path.isfile(transcript_path) or is_codex_rollout(transcript_path):
         return 0
 
-    on_tool_call = event.get("hook_event_name") == PRE_TOOL_USE
-    if not on_tool_call:
+    if event.get("hook_event_name") != PRE_TOOL_USE:
         wait_until_settled(transcript_path)
 
     logs_dir = logs_directory(event)
     os.makedirs(logs_dir, exist_ok=True)
     log_file = os.path.join(logs_dir, LOG_FILENAME)
     state_file = os.path.join(logs_dir, STATE_FILENAME)
-    session_id = str(event.get("session_id", ""))
     now = time.time()
 
     with exclusive_lock(os.path.join(logs_dir, LOCK_FILENAME)):
         state = load_state(state_file)
-        spend = account_for(state, transcript_path, log_file, now)
-        breach = first_breach(spend) if on_tool_call and cap_is_on() else None
-        announce = bool(breach) and due_for_notice(state, session_id, now)
-        if breach:
-            append_lines(log_file, [blocked_line(breach, spend, str(event.get("tool_name", "")), session_id, now)])
+        state.pop("notified_at", None)
+        account_for(state, transcript_path, log_file, now)
         save_state(state_file, state)
-
-    if not breach:
-        return 0
-    if announce:
-        notify(breach)
-
-    minutes, metric, spent, limit = breach
-    print(BLOCK_INSTRUCTION.format(spent=readable(metric, spent), metric=metric, minutes=minutes, limit=readable(metric, limit)), file=sys.stderr)
-    return 2
+    return 0
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as failure:  # a broken accountant must never be the thing that wedges a session
+    except Exception as failure:  # Logging failures must never stop Claude Code.
         print(f"[ai-usage] skipped, {failure}", file=sys.stderr)
         sys.exit(0)
