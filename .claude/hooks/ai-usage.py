@@ -66,6 +66,10 @@ PRICE_PER_MILLION_TOKENS_USD = {
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_create": 1.25, "cache_read": 0.10},
     "gpt-5-mini": {"input": 0.25, "output": 2.00, "cache_create": 0.25, "cache_read": 0.025},
     "gpt-5-nano": {"input": 0.05, "output": 0.40, "cache_create": 0.05, "cache_read": 0.005},
+    # OpenAI API-equivalent rates; the ChatGPT subscription does not bill per request.
+    "gpt-6-sol": {"input": 2.00, "output": 10.00, "cache_create": 2.50, "cache_read": 0.20},
+    "gpt-5.6-terra": {"input": 2.00, "output": 12.00, "cache_create": 2.50, "cache_read": 0.20},
+    "gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_create": 0.125, "cache_read": 0.01},
     # z.ai's model behind the litellm proxy. The transcript records it as
     # `z-ai/glm-5.3-flash`, the OpenRouter id, because that is what Claude Code asks the
     # proxy for; the substring match below is what lets one key cover both spellings.
@@ -80,6 +84,12 @@ PRICE_PER_MILLION_TOKENS_USD = {
     # a prefix is billed at the miss rate rather than as a separate write.
     "qwen3.8-flash": {"input": 0.15, "output": 0.47, "cache_create": 0.15, "cache_read": 0.016},
 }
+LONG_CONTEXT_PRICE_PER_MILLION_TOKENS_USD = {
+    "gpt-6-sol": {"input": 4.00, "output": 15.00, "cache_create": 5.00, "cache_read": 0.40},
+    "gpt-5.6-terra": {"input": 4.00, "output": 18.00, "cache_create": 5.00, "cache_read": 0.40},
+    "gpt-6-luna": {"input": 0.20, "output": 0.75, "cache_create": 0.25, "cache_read": 0.02},
+}
+LONG_CONTEXT_INPUT_TOKENS = 272_000
 FALLBACK_PRICE = PRICE_PER_MILLION_TOKENS_USD["claude-opus-5"]
 
 # A model whose price changes with the clock rather than with the request. DeepSeek sells
@@ -341,6 +351,11 @@ def token_counts(usage):
 
 def costs_in_usd(model, tokens, spent_at):
     price = price_of(model, spent_at)
+    if sum(tokens[kind] for kind in ("input", "cache_create", "cache_read")) > LONG_CONTEXT_INPUT_TOKENS:
+        for known_model, long_context_price in LONG_CONTEXT_PRICE_PER_MILLION_TOKENS_USD.items():
+            if known_model in model:
+                price = long_context_price
+                break
     return {kind: count * price[kind] / TOKENS_PER_MILLION for kind, count in tokens.items()}
 
 

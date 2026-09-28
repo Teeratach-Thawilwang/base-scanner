@@ -1,0 +1,13 @@
+{
+  "window.zoomLevel": 0,
+  "markdown.styles": ["markdown-preview.css"],
+  "chat.fontSize": 16,
+  "chat.editor.fontSize": 14,
+  "editor.fontSize": 14.8,
+  "editor.fontFamily": "'JetBrains Mono', Menlo, monospace",
+  "editor.wrappingStrategy": "advanced",
+  "markdown.preview.fontSize": 14,
+  "[markdown]": {
+    "editor.fontFamily": "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif"
+  }
+}
