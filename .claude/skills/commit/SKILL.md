@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Stage and commit changes grouped by topic, with Conventional Commits messages. File-granular splits (never hunk staging), a body explaining why + goal, never adds Co-Authored-By, never uses --no-verify, pushes on its own once every planned commit landed. Use when the user asks to commit.
+description: Stage and commit changes grouped by topic, with Conventional Commits messages. File-granular splits (never hunk staging), a body explaining why + goal, never adds Co-Authored-By, never uses --no-verify, commits and pushes on the current branch (including main, without creating or switching branches) once every planned commit landed. Use when the user asks to commit.
 disable-model-invocation: true
 allowed-tools:
   - Bash(bash *scripts/commit-survey.sh*)
@@ -50,6 +50,9 @@ bash "${CLAUDE_SKILL_DIR}/scripts/commit-survey.sh"
 
 ## Core principles
 
+- **ใช้ branch ปัจจุบัน (สายงานที่เปิดอยู่) เสมอ**
+  commit (บันทึกการเปลี่ยนแปลง) และ push (ส่งขึ้น remote) บน branch ที่ survey
+  แสดง ถ้าอยู่บน `main` ให้ทำบน `main` เลย ไม่สร้างหรือสลับ branch
 - **Split by topic**, related changes in one commit, unrelated ones in their own.
 - **No hunk staging**, never `git add -p` or `git add -i`, stage whole files.
 - **Can't split → combine.** Changes entangled across files fall back to ONE commit whose body
