@@ -68,9 +68,8 @@ keep-coding-instructions: true
   path แบบ `~/`, path นอกโปรเจกต์ และไฟล์ที่ไม่มีนามสกุล ใช้ได้หมด
   ไฟล์ binary ที่ VSCode ไม่มีตัวเปิด เช่น `.blend`, `.zip` เปิดเป็น tab ที่บอกว่า
   เป็นไฟล์ binary พร้อมปุ่ม Open Anyway นั่นคือขีดสุด ไม่ใช่ลิงก์เสีย
-  ทั้งหมดนี้ใช้ได้ตราบที่ extension ยังติดตั้ง patch จาก
-  [.claude/scripts/patch-vscode-extension.js](.claude/scripts/patch-vscode-extension.js)
-  ลิงก์ที่คลิกแล้วไม่เปิดอะไรแปลว่า VSCode อัปเดต extension ให้รัน script นั้นใหม่
+  ทั้งหมดนี้ใช้ได้ตราบที่ extension ยังติดตั้ง patch จากคำสั่ง `cc-patch-extension`
+  ลิงก์ที่คลิกแล้วไม่เปิดอะไรแปลว่า VSCode อัปเดต extension ให้รันคำสั่งนั้นใหม่
 - path ที่มีช่องว่างต้องครอบด้วย `<>` ไม่งั้น markdown ตัดลิงก์ตรงช่องว่าง:
   ✅ [ep 12 final.mp4](<output/ep 12 final.mp4>)
 - ลิงก์โฟลเดอร์ใช้เมื่อหมายถึงโฟลเดอร์ ถ้าหมายถึงไฟล์ในโฟลเดอร์ห้ามใช้ลิงก์โฟลเดอร์:
