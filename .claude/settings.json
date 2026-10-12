@@ -144,6 +144,7 @@
   "showThinkingSummaries": false,
   "skipDangerousModePermissionPrompt": true,
   "switchModelsOnFlag": false,
+  "includeCoAuthoredBy": false,
   "plansDirectory": "./.plans",
   "outputStyle": "human-styles"
 }

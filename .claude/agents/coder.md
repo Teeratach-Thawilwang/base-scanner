@@ -1,8 +1,8 @@
 ---
 name: coder
 description: Writes code for ONE independent unit of an already-approved plan or a frozen spec. Dispatch one per disjoint file set. Never use it to read, explore, summarize, review, or debug, that is main-agent work.
-model: opus
-effort: high
+model: inherit
+effort: medium
 disallowedTools: Agent, Workflow, mcp__playwright
 ---
 

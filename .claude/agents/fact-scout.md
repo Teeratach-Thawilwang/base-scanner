@@ -1,8 +1,8 @@
 ---
 name: fact-scout
 description: The main agent's investigator. Reads the bulk in its own context (library / framework / API docs, a web page, a library's own source, or in-project material too large to open in the main conversation) and hands back only the lines that decide the question, quoted verbatim with their source. Dispatch when the raw material would flood this conversation and the answer is small. Never to decide, review, or audit, that is the main agent's work.
-model: opus
-effort: xhigh
+model: inherit
+effort: medium
 tools: WebFetch, WebSearch, Read, Grep, Glob, mcp__context7__resolve-library-id, mcp__context7__query-docs, mcp__plugin_context7_context7__resolve-library-id, mcp__plugin_context7_context7__query-docs
 maxTurns: 12
 color: cyan

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import datetime
 import glob
+import importlib.util
 import json
+import math
 import os
 import sys
 import time
@@ -10,47 +12,11 @@ from hook_lib import FILE_ENCODING, exclusive_lock, load_state, logs_directory, 
 
 USD_TO_THB = 34
 
-PRICE_PER_MILLION_TOKENS_USD = {
-    "claude-fable-5": {"input": 10.00, "output": 50.00, "cache_create": 12.50, "cache_read": 1.00},
-    "claude-opus-5-5": {"input": 4.00, "output": 20.00, "cache_create": 5.00, "cache_read": 0.20},
-    "claude-opus-5": {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
-    "claude-opus-4-8": {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
-    "claude-opus-4-6": {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
-    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_create": 2.50, "cache_read": 0.20},
-    "claude-sonnet-5": {"input": 2.00, "output": 10.00, "cache_create": 2.50, "cache_read": 0.20},
-    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "cache_create": 3.75, "cache_read": 0.30},
-    "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_create": 1.25, "cache_read": 0.10},
-    "gpt-5-mini": {"input": 0.25, "output": 2.00, "cache_create": 0.25, "cache_read": 0.025},
-    "gpt-5-nano": {"input": 0.05, "output": 0.40, "cache_create": 0.05, "cache_read": 0.005},
-    # OpenAI API-equivalent rates; the ChatGPT subscription does not bill per request.
-    "gpt-6.1-sol": {"input": 2.00, "output": 10.00, "cache_create": 2.50, "cache_read": 0.10},
-    "gpt-6-sol": {"input": 2.00, "output": 10.00, "cache_create": 2.50, "cache_read": 0.20},
-    "gpt-5.6-terra": {"input": 2.00, "output": 12.00, "cache_create": 2.50, "cache_read": 0.20},
-    "gpt-6-luna": {"input": 0.10, "output": 0.50, "cache_create": 0.125, "cache_read": 0.01},
-    # Implicit cache writes are billed at the input miss rate on OpenRouter.
-    "glm-5.3-flash": {"input": 0.15, "output": 0.50, "cache_create": 0.15, "cache_read": 0.03},
-    "qwen3.8-flash": {"input": 0.15, "output": 0.47, "cache_create": 0.15, "cache_read": 0.016},
-}
-LONG_CONTEXT_PRICE_PER_MILLION_TOKENS_USD = {
-    "gpt-6.1-sol": {"input": 4.00, "output": 15.00, "cache_create": 5.00, "cache_read": 0.20},
-    "gpt-6-sol": {"input": 4.00, "output": 15.00, "cache_create": 5.00, "cache_read": 0.40},
-    "gpt-5.6-terra": {"input": 4.00, "output": 18.00, "cache_create": 5.00, "cache_read": 0.40},
-    "gpt-6-luna": {"input": 0.20, "output": 0.75, "cache_create": 0.25, "cache_read": 0.02},
-}
-LONG_CONTEXT_INPUT_TOKENS = 272_000
-FALLBACK_PRICE = PRICE_PER_MILLION_TOKENS_USD["claude-opus-5"]
-
-TIERED_PRICE_PER_MILLION_TOKENS_USD = {
-    "deepseek-flash": {
-        "peak": {"input": 0.30, "output": 1.20, "cache_create": 0.30, "cache_read": 0.006},
-        "off_peak": {"input": 0.15, "output": 0.60, "cache_create": 0.15, "cache_read": 0.003},
-    },
-    "deepseek-v4.1-flash": {
-        "peak": {"input": 0.30, "output": 1.20, "cache_create": 0.30, "cache_read": 0.006},
-        "off_peak": {"input": 0.15, "output": 0.60, "cache_create": 0.15, "cache_read": 0.003},
-    },
-}
-PEAK_HOURS_UTC = ((1, 4), (6, 10))
+price_spec = importlib.util.spec_from_file_location(
+    "usage_price_lookup", os.path.join(os.path.dirname(__file__), "ai-model-price.py")
+)
+price_lookup = importlib.util.module_from_spec(price_spec)
+price_spec.loader.exec_module(price_lookup)
 
 USAGE_FIELD = {
     "input": "input_tokens",
@@ -122,11 +88,11 @@ def is_assistant_reply(record):
     )
 
 
-def epoch_of(timestamp):
+def parsed_timestamp(text):
     try:
-        return datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
+        return datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
     except (AttributeError, ValueError):
-        return 0
+        return None
 
 
 def unread_lines(transcript_path, offset):
@@ -215,30 +181,8 @@ def session_transcripts(transcript_path):
     return [root, *sorted(subagents)]
 
 
-def flat_price_of(model):
-    for known_model in sorted(PRICE_PER_MILLION_TOKENS_USD, key=len, reverse=True):
-        if known_model in model:
-            return PRICE_PER_MILLION_TOKENS_USD[known_model]
-    return None
-
-
-def is_peak_hour(spent_at):
-    moment = datetime.datetime.fromtimestamp(spent_at, datetime.timezone.utc)
-    if moment.weekday() > 4:
-        return False
-    return any(start <= moment.hour < end for start, end in PEAK_HOURS_UTC)
-
-
-def tiered_price_of(model, spent_at):
-    for known_model in sorted(TIERED_PRICE_PER_MILLION_TOKENS_USD, key=len, reverse=True):
-        if known_model in model:
-            rates = TIERED_PRICE_PER_MILLION_TOKENS_USD[known_model]
-            return rates["peak"] if is_peak_hour(spent_at) else rates["off_peak"]
-    return None
-
-
 def price_of(model, spent_at):
-    return tiered_price_of(model, spent_at) or flat_price_of(model) or FALLBACK_PRICE
+    return price_lookup.selected_rates(model, spent_at)
 
 
 def token_counts(usage):
@@ -246,13 +190,15 @@ def token_counts(usage):
 
 
 def costs_in_usd(model, tokens, spent_at):
-    price = price_of(model, spent_at)
-    if sum(tokens[kind] for kind in ("input", "cache_create", "cache_read")) > LONG_CONTEXT_INPUT_TOKENS:
-        for known_model, long_context_price in LONG_CONTEXT_PRICE_PER_MILLION_TOKENS_USD.items():
-            if known_model in model:
-                price = long_context_price
-                break
-    return {kind: count * price[kind] / TOKENS_PER_MILLION for kind, count in tokens.items()}
+    context = sum(tokens[kind] for kind in ("input", "cache_create", "cache_read"))
+    price = price_lookup.selected_rates(model, spent_at, context)
+    try:
+        costs = {kind: count * price[kind] / TOKENS_PER_MILLION for kind, count in tokens.items()}
+        if any(not math.isfinite(cost * USD_TO_THB) or cost < 0 for cost in costs.values()):
+            raise ValueError("invalid cost")
+    except (ValueError, OverflowError):
+        raise price_lookup.PriceLookupError("cost_invalid") from None
+    return costs
 
 
 def converted_to(currency_rate, costs):
@@ -267,34 +213,27 @@ def money(thb, usd, decimals):
     return f"[{thb:.{decimals}f}฿, ${usd:.{decimals}f}]"
 
 
-def short_model_name(model):
-    prefix = "claude-"
-    return model[len(prefix) :] if model.startswith(prefix) else model
-
-
 def reply_mode(message):
     blocks = message.get("content", [])
     thinking = any(isinstance(block, dict) and block.get("type") == "thinking" for block in blocks)
     return "thinking" if thinking else "standard"
 
 
-def elapsed_between(started_at, completed_at):
-    if not started_at or not completed_at:
-        return "N/A"
-    try:
-        started = datetime.datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-        completed = datetime.datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
-    except ValueError:
+def elapsed_between(started, completed):
+    if not started or not completed:
         return "N/A"
     return f"{(completed - started).total_seconds():.1f}s"
 
 
-def format_entry(record, conversation, tokens, thb, usd, totals, elapsed):
+def format_entry(record, conversation, tokens, thb, usd, totals, elapsed, reason=""):
+    def cost_field(kind):
+        return "null" if usd is None else money(thb[kind], usd[kind], LOGGED_BREAKDOWN_DECIMALS)
+
     message = record["message"]
     return FIELD_SEPARATOR.join(
         [
-            f"model={short_model_name(message.get('model', 'unknown'))}",
-            f"cost={money(total(thb), total(usd), LOGGED_COST_DECIMALS)}",
+            f"model={message.get('model', 'unknown')}",
+            f"cost={'null' if usd is None else money(total(thb), total(usd), LOGGED_COST_DECIMALS)}",
             f"cost_total={money(totals['cumulative_thb'], totals['cumulative_usd'], LOGGED_COST_DECIMALS)}",
             f"{CONVERSATION_FIELD}{conversation}",
             f"mode={reply_mode(message)}",
@@ -305,19 +244,24 @@ def format_entry(record, conversation, tokens, thb, usd, totals, elapsed):
             f"output_total={totals['cumulative_output']}",
             f"cache_create={tokens['cache_create']}",
             f"cache_read={tokens['cache_read']}",
-            f"cost_input={money(thb['input'], usd['input'], LOGGED_BREAKDOWN_DECIMALS)}",
-            f"cost_output={money(thb['output'], usd['output'], LOGGED_BREAKDOWN_DECIMALS)}",
-            f"cost_cache_create={money(thb['cache_create'], usd['cache_create'], LOGGED_BREAKDOWN_DECIMALS)}",
-            f"cost_cache_read={money(thb['cache_read'], usd['cache_read'], LOGGED_BREAKDOWN_DECIMALS)}",
+            f"cost_input={cost_field('input')}",
+            f"cost_output={cost_field('output')}",
+            f"cost_cache_create={cost_field('cache_create')}",
+            f"cost_cache_read={cost_field('cache_read')}",
             f"duration={elapsed}",
             f"{ID_FIELD}{record.get('uuid', '')[:REPLY_ID_LENGTH]}",
+            f"cumulative_unknown={totals['cumulative_unknown']}",
+            *([f"cost_reason={reason}"] if reason else []),
         ]
     )
 
 
 def add_to_running_totals(totals, thb, usd, tokens):
-    totals["cumulative_thb"] = round(totals["cumulative_thb"] + total(thb), STORED_MONEY_DECIMALS)
-    totals["cumulative_usd"] = round(totals["cumulative_usd"] + total(usd), STORED_MONEY_DECIMALS)
+    if usd is None:
+        totals["cumulative_unknown"] += 1
+    else:
+        totals["cumulative_thb"] = round(totals["cumulative_thb"] + total(thb), STORED_MONEY_DECIMALS)
+        totals["cumulative_usd"] = round(totals["cumulative_usd"] + total(usd), STORED_MONEY_DECIMALS)
     totals["cumulative_output"] += tokens["output"]
 
 
@@ -338,6 +282,7 @@ def empty_entry():
         "cumulative_thb": 0.0,
         "cumulative_usd": 0.0,
         "cumulative_output": 0,
+        "cumulative_unknown": 0,
     }
 
 
@@ -365,17 +310,25 @@ def entries_for_new_replies(entry, chunk, name, log_cutoff, moments):
         entry["last_reply_id"] = reply_id
 
         tokens = token_counts(message["usage"])
-        spent_at = epoch_of(record.get("timestamp", ""))
+        completed = parsed_timestamp(record.get("timestamp"))
+        spent_at = completed.timestamp() if completed else 0
         if spent_at < log_cutoff:
             continue
 
-        costs = costs_in_usd(message.get("model", "unknown"), tokens, spent_at)
-        thb = converted_to(USD_TO_THB, costs)
-        usd = converted_to(1, costs)
+        reason = ""
+        try:
+            costs = costs_in_usd(message.get("model", "unknown"), tokens, spent_at)
+            thb = converted_to(USD_TO_THB, costs)
+            usd = converted_to(1, costs)
+        except price_lookup.PriceLookupError as failure:
+            reason = str(failure)
+            thb = usd = None
         add_to_running_totals(entry, thb, usd, tokens)
-        elapsed = elapsed_between(moments.get(record.get("parentUuid")), record.get("timestamp", ""))
-        entry["logged_ids"] = (entry["logged_ids"] + [record.get("uuid", "")[:REPLY_ID_LENGTH]])[-LOGGED_IDS_KEPT:]
-        logged.append((record.get("timestamp", ""), format_entry(record, name, tokens, thb, usd, entry, elapsed)))
+        elapsed = elapsed_between(parsed_timestamp(moments.get(record.get("parentUuid"))), completed)
+        entry["logged_ids"].append(record.get("uuid", "")[:REPLY_ID_LENGTH])
+        logged.append((record.get("timestamp", ""), format_entry(record, name, tokens, thb, usd, entry, elapsed, reason)))
+    if len(entry["logged_ids"]) > LOGGED_IDS_KEPT:
+        entry["logged_ids"] = entry["logged_ids"][-LOGGED_IDS_KEPT:]
     return logged
 
 
@@ -405,7 +358,8 @@ def rename_logged_replies(log_file, ids, name):
         return
     with open(log_file, encoding=FILE_ENCODING) as log:
         logged = log.read().splitlines()
-    lines = [renamed(line, set(ids), name) for line in logged]
+    wanted = set(ids)
+    lines = [renamed(line, wanted, name) for line in logged]
     if lines == logged:
         return
     write_atomically(log_file, "".join(line + "\n" for line in lines))
@@ -425,6 +379,7 @@ def absorb(transcripts, transcript_path, log_file, now, session_name):
 
     lines, offset = unread_lines(transcript_path, entry["offset"])
     chunk = read_chunk(lines)
+    progressed = offset != entry["offset"]
     moments = remember(entry, chunk)
     entry["offset"] = offset
     entry["seen_at"] = now
@@ -432,29 +387,35 @@ def absorb(transcripts, transcript_path, log_file, now, session_name):
     name = conversation_name(entry, transcript_path, session_name)
     logged = entries_for_new_replies(entry, chunk, name, now - CATCHUP_SECONDS if first_sight else 0, moments)
     entry["moments"] = trimmed(moments, MOMENTS_KEPT)
-    if name != entry["name"]:
+    renamed_conversation = name != entry["name"]
+    if renamed_conversation:
         rename_logged_replies(log_file, entry["logged_ids"], name)
         entry["name"] = name
     append_lines(log_file, [line for _, line in sorted(logged, key=lambda logged_reply: logged_reply[0])])
 
     transcripts[transcript_path] = entry
-    return name
+    return name, first_sight or progressed or renamed_conversation or bool(logged)
 
 
 def account_for(state, transcript_path, log_file, now):
     transcripts = state.setdefault("transcripts", {})
     session_name = ""
+    absorbed = False
     for path in session_transcripts(transcript_path):
         if os.path.isfile(path):
-            name = absorb(transcripts, path, log_file, now, session_name)
+            name, changed = absorb(transcripts, path, log_file, now, session_name)
+            absorbed = absorbed or changed
             session_name = session_name or name
-    state["transcripts"] = {
+    kept = {
         path: entry for path, entry in transcripts.items()
         if now - entry["seen_at"] < STALE_TRANSCRIPT_SECONDS
     }
+    state["transcripts"] = kept
+    return absorbed or len(kept) != len(transcripts)
 
 
 def main():
+    price_lookup.reset_cache()
     event = read_event()
     if event.get("stop_hook_active"):
         return 0
@@ -474,9 +435,10 @@ def main():
 
     with exclusive_lock(os.path.join(logs_dir, LOCK_FILENAME)):
         state = load_state(state_file)
-        state.pop("notified_at", None)
-        account_for(state, transcript_path, log_file, now)
-        save_state(state_file, state)
+        retired_notice = state.pop("notified_at", None) is not None
+        changed = account_for(state, transcript_path, log_file, now)
+        if changed or retired_notice:
+            save_state(state_file, state)
     return 0
 
 
