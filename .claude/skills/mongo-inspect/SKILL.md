@@ -1,50 +1,62 @@
 ---
 name: mongo-inspect
-description: Read MongoDB through a temp Node script that loads .env, connects, queries, then deletes itself. Use on /mongo-inspect, or whenever you need to see the state of a collection while debugging, instead of hand-writing a script each time.
+description: Read MongoDB through a throwaway script that connects, queries, prints, then deletes itself. Use on /mongo-inspect, or whenever you need to see what a collection holds while debugging, instead of hand-writing a script each time.
 ---
 
-# DB Inspect
+# Mongo Inspect
 
-Quick, safe, repeatable MongoDB **reads**, in place of the write-script → run → error → rewrite cycle.
+Fast, read-only MongoDB queries in any project.
 
 ## Usage
 
 ```
-/mongo-inspect <collection> [query]
+/mongo-inspect                         list collections
+/mongo-inspect <collection>            count + 3 sample docs
+/mongo-inspect <collection> <filter>   find, limit 10
 ```
 
-The collection names below are placeholders. Pass whatever the `listCollections` run actually returned, never a name you assumed the project has.
+Examples, all made up:
 
-- `/mongo-inspect` → list the collections
-- `/mongo-inspect users { email: "someone@example.com" }`
-- `/mongo-inspect <collection> { userId: "abc123", status: "completed" }`
-- `/mongo-inspect <collection> { name: /keyword/i }`
+```
+/mongo-inspect orders { status: "paid" }
+/mongo-inspect orders { _id: "65f1c2a9e4b0a1b2c3d4e5f6" }
+/mongo-inspect products { name: /lamp/i }
+```
 
-## How it works
+## Find the connection
 
-read the connection URI and the database name from the project's `.env`, under the variable names that file already uses → write the script to `/tmp/mongo-inspect-<timestamp>.mjs` → run it from the repo root with a runner the project already has (`npx tsx`, `node`, `bun`) → delete the script the moment the run ends, success or failure alike → report the result
+Don't assume variable names. Check, in order:
 
-**Never hardcode a DB name.**
+1. Env files at the repo root: `.env.local`, `.env.development`, `.env`.
+   Grep for a value starting with `mongodb://` or `mongodb+srv://`.
+2. A var holding the DB name, e.g. `*_DB`, `*_DATABASE`, `*_DB_NAME`.
+3. No DB var → use the DB in the URI path. Neither → list databases
+   and ask.
+
+Never print the URI. It carries credentials.
+
+## Run it
+
+Use Node with the project's own `mongodb` driver, never `mongosh`. The script
+must live **inside the repo root**, not `/tmp`, or `import 'mongodb'`
+won't resolve against the project's `node_modules`.
+
+```
+write   <repo>/.mongo-inspect-<timestamp>.mjs
+run     node --env-file=<env file> .mongo-inspect-<timestamp>.mjs
+delete  the script, success or failure
+```
 
 ```javascript
-import { MongoClient } from 'mongodb';
-import { config } from 'dotenv';
-import { resolve } from 'path';
+import { MongoClient, ObjectId } from 'mongodb';
 
-config({ path: resolve('.env') });
-
-// this pair is the common naming; use whichever names the project's .env holds
-const client = new MongoClient(process.env.MONGODB_URI);
+const client = new MongoClient(process.env.<URI_VAR>);
 try {
   await client.connect();
-  const db = client.db(process.env.MONGODB_DB);
-
-  // no collection → listCollections
-  // collection + query → find
-  // collection alone → count + sample
+  const db = client.db(process.env.<DB_VAR>); // omit arg to use the URI's DB
 
   const result = await db.collection('<collection>')
-    .find(<query>)
+    .find(<filter>)
     .limit(10)
     .toArray();
 
@@ -54,15 +66,44 @@ try {
 }
 ```
 
+No `mongodb` package in the project → tell the user, don't install
+anything.
+
 ## Rules
 
-- **Read-only.** `find`, `aggregate`, `count`, `listCollections`, and nothing else. A write / update / delete → refuse, and tell the user to ask for it explicitly.
-- **`limit(10)` by default**, and the user can override it.
-- **A 24-hex-char string is an ObjectId.** Wrap it in `new ObjectId('…')` and add the import.
-- **Never dump a huge document.** Over 50 fields, or a nested array over 20 items → report the identifying fields plus the ones the user asked about.
+- **Read-only.**
+  `find`, `findOne`, `aggregate`, `countDocuments`, `listCollections`,
+  `listDatabases`. Anything that writes → refuse; the user must ask
+  explicitly.
+- **`aggregate` with `$out` or `$merge` counts as a write.**
+- **Limit 10 by default.** The user can override.
+- **Convert ids before querying.** See the next section.
+- **Trim large docs.**
+  Over 50 fields, or an array over 20 items → show the identifying fields
+  plus the ones asked about.
+- **Mask secrets in output.**
+  Fields like `password`, `token`, `secret`, `apiKey` → `"***"`.
+
+## ObjectId
+
+The user pastes ids as plain text. MongoDB never matches the string
+`"65f1…"` against an ObjectId, so an unconverted id returns nothing.
+
+- **Every 24-hex value in the filter is a candidate id.**
+  `/^[0-9a-f]{24}$/i`, in any field, at any depth, including inside `$in`.
+- **Match both forms.** A field may store the id as an ObjectId or as a
+  string, so replace each candidate with:
+  `{ $in: [new ObjectId('<hex>'), '<hex>'] }`
+- **A bare id with no field means `_id`.**
+  `/mongo-inspect orders 65f1c2a9e4b0a1b2c3d4e5f6` →
+  `{ _id: { $in: [new ObjectId('65f1…'), '65f1…'] } }`
+- **Zero results is not "not found" yet.**
+  Before reporting, check that the conversion ran, and say in the reply
+  which forms were tried.
 
 ## When it fails
 
-- **Connection refused** → does the project's `.env` exist, and does it hold the URI variable the script read?
-- **Collection not found** → list the collections, suggest the closest name.
-- **Query syntax error** → usually a missing quote or a wrong field name, fix it and retry **once**.
+- **Can't connect**: wrong env file, missing var, or the DB isn't running.
+  Say which.
+- **Collection not found**: list collections, suggest the closest name.
+- **Query syntax error**: fix and retry once, then stop and show the error.
